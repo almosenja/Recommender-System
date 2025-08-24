@@ -12,4 +12,10 @@ venv/
 Thumbs.db
 # PyTorch / data
 *.pt
+*.pth
 data/
+model/
+runs/
+.idea/
+*.png
+*.csv
