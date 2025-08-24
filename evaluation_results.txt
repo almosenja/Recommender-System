@@ -1,0 +1,31 @@
+FINAL TEST SET EVALUATION RESULTS
+==================================================
+
+Best Validation HR@10: 0.2965
+
+Test Set Metrics:
+------------------------------
+K=5:
+  HR: 0.2268
+  NDCG: 0.1736
+  Precision: 0.0454
+  Recall: 0.2268
+
+K=10:
+  HR: 0.2943
+  NDCG: 0.1954
+  Precision: 0.0294
+  Recall: 0.2943
+
+K=20:
+  HR: 0.3901
+  NDCG: 0.2193
+  Precision: 0.0195
+  Recall: 0.3901
+
+K=50:
+  HR: 0.6280
+  NDCG: 0.2660
+  Precision: 0.0126
+  Recall: 0.6280
+
