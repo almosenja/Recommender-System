@@ -40,8 +40,8 @@ Defaults live in `recsys/config.py`. Adjust `ModelCfg`, `TrainCfg`, or domain na
 
 ## Structure
 ```
-recsys_xdomain_sasrec/
-├─ recsys/
+Recommender-System/
+├─ cross_domain_recsys/
 │  ├─ __init__.py
 │  ├─ config.py
 │  ├─ utils.py
@@ -53,6 +53,9 @@ recsys_xdomain_sasrec/
 │  ├─ train.py
 │  ├─ rl.py
 │  └─ recommend.py
+├─ 01_EDA.ipynb
+├─ 02_recsys_model_development.ipynb
+├─ 03_recsys_cross_domain_development.ipynb
 ├─ app.py
 ├─ requirements.txt
 └─ README.md
@@ -68,4 +71,4 @@ recsys_xdomain_sasrec/
 ## Acknowledgments
 * Original SASRec implementation inspired [this work](https://github.com/kang205/SASRec).
 * Amazon review datasets from [here](https://huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-2023).
-* Cross-domain ideas inspired by [this work](https://arxiv.org/abs/2008.12298).
+* Cross-domain ideas inspired by [this work](https://arxiv.org/pdf/2110.11154).

@@ -35,7 +35,7 @@ checkpoints/
 models/
 model_sasrec/
 model/
-model_neumf
+model_neumf/
 
 # Data
 data/
