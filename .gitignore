@@ -39,11 +39,13 @@ model_neumf/
 
 # Data
 data/
+artifacts/
 *.csv
 *.json
 *.parquet
 *.h5
 *.hdf5
+*.pkl
 
 # Logs
 logs/
