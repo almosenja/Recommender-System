@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/Recommender-System.iml" filepath="$PROJECT_DIR$/.idea/Recommender-System.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/recsys.iml" filepath="$PROJECT_DIR$/.idea/recsys.iml" />
     </modules>
   </component>
 </project>
