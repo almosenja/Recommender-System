@@ -258,8 +258,8 @@ def transfer_mode(args):
         pickle.dump({"user": target_user_enc, "item": target_item_enc}, f)
 
     # Analyze domain overlap
-    users_src = set(source_df["user"])
-    users_tgt = set(target_df["user"])
+    users_src = set(source_df_encoded["user"])
+    users_tgt = set(target_df_encoded["user"])
     common_users = users_src.intersection(users_tgt)
     print(f"   Source domain users: {len(users_src)}")
     print(f"   Target domain users: {len(users_tgt)}")
@@ -376,23 +376,17 @@ def transfer_mode(args):
     evaluator = Evaluator(config)
     model = load_model(transfer_model, f"{config.model_dir}/transfer_domain/{args.model_name}.pth")
     ks = [5, 10, 20, 50]
-    original_k = getattr(config, "top_k", None)
 
     # Collect per-K metrics; K will be the DataFrame index
     rows_by_k = {}
     for k in ks:
-        config.top_k = k
-        mk = evaluator.evaluate(model, target_test_loader)
+        mk = evaluator.evaluate_transfer(model, target_test_loader, k=k)
         rows_by_k[k] = {
             "HR": mk.get("HR@K"),
             "NDCG": mk.get("NDCG@K"),
             "Precision": mk.get("Precision@K"),
             "MRR": mk.get("MRR@K"),
         }
-
-    # Restore original K
-    if original_k is not None:
-        config.top_k = original_k
 
     test_results_df = pd.DataFrame.from_dict(rows_by_k, orient="index").sort_index()
     test_results_df.index.name = "K"
@@ -494,11 +488,6 @@ def eval_mode(args):
     print(f"   Train sequence lengths - Min: {train_lens.min()}, Max: {train_lens.max()}")
 
     # Percentile-based threshold
-    # cold_threshold = 3
-    # cold_users = {u for u, seq in user_sequences.items() if len(seq) <= cold_threshold}
-    # warm_users = {u for u, seq in user_sequences.items() if len(seq) > cold_threshold}
-
-    # Percentile-based threshold
     p = 30
     cold_threshold = max(1, int(np.percentile(train_lens, p)))
     print(f"   Cold user threshold (<= {p}th percentile): {cold_threshold} interactions")
@@ -567,8 +556,6 @@ def eval_mode(args):
 
     print(f"\nDetailed results saved to {os.path.join(args.save_dir, 'transfer_domain', 'detailed_test_results.json')}")
 
-
-
 def rl_finetune_mode(args):
     """Fine-tune model with reinforcement learning."""
     print("=" * 80)
@@ -576,7 +563,8 @@ def rl_finetune_mode(args):
     print("=" * 80)
 
     # Load config
-    config = load_config(os.path.join(args.save_dir, "transfer_domain", "config.json"))
+    config = Config()
+    config = load_config(f"{config.save_dir}/transfer_domain/config.json")
     config.device = args.device
     config.rl_epochs = args.rl_epochs
     config.rl_lr = args.rl_lr
@@ -595,30 +583,53 @@ def rl_finetune_mode(args):
     df_encoded, _, _ = processor.encode_ids(df_filtered)
 
     # Load encoders
-    with open(f"{config.save_dir}/transfer_domain_rl/encoders.pkl"), "rb") as f:
+    with open(f"{config.save_dir}/transfer_domain/encoders.pkl", "rb") as f:
         encoders = pickle.load(f)
         processor.user_encoder = encoders["user"]
         processor.item_encoder = encoders["item"]
 
     # Create sequences
     user_sequences = processor.create_sequences(df_encoded)
-    _, val_seqs, test_seqs = processor.split_sequences(user_sequences)
+    train_seqs, _, test_seqs = processor.split_sequences(user_sequences)
+
+    # 1. Load the transfer_matrix, which is essential for the transfer model
+    print("\nLoading transfer matrix...")
+    transfer_matrix_path = os.path.join(config.save_dir, "source_domain", "transfer_matrix.pth")
+    if not os.path.exists(transfer_matrix_path):
+        raise FileNotFoundError(f"Transfer matrix not found at {transfer_matrix_path}")
+    transfer_matrix = torch.load(transfer_matrix_path, map_location=config.device)
+
+    # Use TransferDataset to provide the 'transfer_src' vector in each batch
+    # Randomly pick a subset of users for RL fine-tuning
+    rng = np.random.default_rng(config.seed)
+    train_users = np.array(list(train_seqs.keys()))
+    rng.shuffle(train_users)
+
+    rl_frac = 0.25
+    split_n = int(len(train_users) * rl_frac)
+    rl_users = set(train_users[:split_n])
+    train_rl_seqs = {u: train_seqs[u] for u in rl_users}
 
     # Create datasets
     num_items = df_encoded["item_id"].max() + 1
     pos_items_by_user = {u: set(seq) for u, seq in user_sequences.items()}
 
-    val_dataset = SASRecDataset(val_seqs, num_items, pos_items_by_user=pos_items_by_user,
-                                max_seq_len=config.max_seq_len, mode="val", neg_samples=config.neg_samples_eval)
-    test_dataset = SASRecDataset(test_seqs, num_items, pos_items_by_user=pos_items_by_user,
-                                 max_seq_len=config.max_seq_len, mode="test", neg_samples=config.neg_samples_eval)
+    print("\nCreating TransferDatasets for RL fine-tuning...")
+    train_dataset = TransferDataset(
+        train_rl_seqs, num_items, config.max_seq_len, pos_items_by_user=pos_items_by_user,
+        transfer_matrix=transfer_matrix, mode="train", neg_samples=config.neg_samples_eval # use 99 for finetuning
+    )
+    test_dataset = TransferDataset(
+        test_seqs, num_items, config.max_seq_len, pos_items_by_user=pos_items_by_user,
+        transfer_matrix=transfer_matrix, mode="test", neg_samples=config.neg_samples_eval
+    )
 
-    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False)
 
     # Load model
     print("\nLoading model and starting RL fine-tuning...")
-    model = SASRec(
+    base_model = SASRec(
         num_items=num_items,
         hidden_dim=config.hidden_dim,
         max_seq_len=config.max_seq_len,
@@ -627,16 +638,24 @@ def rl_finetune_mode(args):
         dropout=config.dropout
     )
 
+    model = SASRecTransfer(
+        base_model,
+        hidden_dim=config.hidden_dim,
+        bridge_hidden=config.bridge_hidden,
+        dropout=config.dropout
+    )
+
+    # Load weights
     model = load_model(model, os.path.join(args.model_dir, "transfer_domain", f"{args.model_name}.pth"), config.device)
 
     # Evaluate before RL fine-tuning
     evaluator = Evaluator(config)
     before_metrics = evaluator.evaluate(model, test_loader)
-    print(f"   HR@{config.top_k}: {before_metrics['HR@K']:.4f}, NDCG@{config.top_k}: {pre_rl_metrics['NDCG@K']:.4f}")
+    print(f"   HR@{config.top_k}: {before_metrics['HR@K']:.4f}, NDCG@{config.top_k}: {before_metrics['NDCG@K']:.4f}")
 
     # RL Fine-tuning
     rl_trainer = RLTrainer(model, config)
-    history = rl_trainer.finetune(val_loader, config.rl_epochs)
+    _ = rl_trainer.finetune(train_loader, config.rl_epochs)
 
     # Evaluate after RL
     print("\n   Evaluating model after RL fine-tuning...")

@@ -49,9 +49,7 @@ class Trainer:
         top_k = self.config.top_k
         model.to(device)
 
-        neg_per_pos = train_loader.dataset.neg_samples
-        loss_fn = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(neg_per_pos, device=device),
-                               reduction="sum")
+        loss_fn = nn.BCEWithLogitsLoss()
         optimizer = torch.optim.Adam(
             model.parameters(),
             lr=self.config.learning_rate,
@@ -142,7 +140,7 @@ class TrainerTransfer:
         top_k = self.config.top_k
         model.to(device)
 
-        loss_fn = nn.CrossEntropyLoss()
+        loss_fn = nn.BCEWithLogitsLoss()
         optimizer = torch.optim.Adam(
             model.parameters(),
             lr=self.config.learning_rate,

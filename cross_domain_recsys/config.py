@@ -11,8 +11,8 @@ class Config:
 
     # Data preprocessing
     max_items: int | None = None
-    min_user_interactions: int = 10
-    min_item_interactions: int = 10
+    min_user_interactions: int = 5
+    min_item_interactions: int = 5
     max_seq_len: int = 50
     neg_samples_train: int = 4
     neg_samples_eval: int = 99

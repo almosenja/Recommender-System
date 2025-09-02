@@ -92,6 +92,8 @@ class RLTrainer:
 
         acc = (actions == 0).float().mean().item()
 
+        torch.save(self.model.state_dict(), f"{self.config.model_dir}/transfer_domain_rl/rl_finetuned_model.pth")
+
         return {
             "loss": loss.item(),
             "avg_reward": rewards.mean().item(),
@@ -120,7 +122,7 @@ class RLTrainer:
             m = {k: float(np.mean([x[k] for x in stats])) for k in stats[0].keys()}
 
             print(f"   Loss: {m['loss']:.4f} | Reward: {m['avg_reward']:.4f} | "
-                  f"Hit: {m['hit_rate']:.4f} | Entropy: {m['entropy']:.4f}")
+                  f"Hit: {m['hit_rate']:.4f} | Entropy: {m['entropy']:.4f} | Adv: {m['advantage']:.4f}")
 
             for key in history.keys():
                 history[key].append(m[key])
