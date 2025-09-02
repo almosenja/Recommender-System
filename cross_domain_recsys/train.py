@@ -49,7 +49,9 @@ class Trainer:
         top_k = self.config.top_k
         model.to(device)
 
-        loss_fn = nn.CrossEntropyLoss()
+        neg_per_pos = train_loader.dataset.neg_samples
+        loss_fn = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(neg_per_pos, device=device),
+                               reduction="sum")
         optimizer = torch.optim.Adam(
             model.parameters(),
             lr=self.config.learning_rate,
@@ -86,7 +88,7 @@ class Trainer:
                     model.state_dict(),
                     os.path.join(self.config.model_dir, "source_domain", f"{save_name}.pth")
                 )
-                print(f"   -> New best model saved")
+                print(f"   -> New best model saved in {self.config.model_dir}/source_domain/{save_name}.pth")
 
         print(f"\n   Training complete. Best epoch: {best_epoch} with NDCG@{self.config.top_k}: {best_ndcg:.4f}")
 
@@ -113,31 +115,23 @@ class TrainerTransfer:
             neg_items = batch["neg_items"].to(device).long()
             transfer = batch["transfer_src"].to(device)
 
-            # Create candidates: first column is positive, rest are negatives
-            logits = model(input_seq, transfer_source=transfer)
-            pos_emb = model.base_model.item_embed(pos_items)
-            neg_emb = model.base_model.item_embed(neg_items)
+            # Build candidate items
+            candidates = torch.cat([pos_items.unsqueeze(1), neg_items], dim=1)
+            labels = torch.zeros_like(candidates, dtype=torch.float32)
+            labels[:, 0] = 1.0
 
-            # Compute scores
-            pos_logits = (logits * pos_emb).sum(dim=1)
-            neg_logits = torch.bmm(neg_emb, logits.unsqueeze(-1)).squeeze(-1)
-            all_logits = torch.cat([
-                pos_logits.unsqueeze(1),
-                neg_logits],
-            dim=1)
-            all_labels = torch.cat([
-                torch.ones_like(pos_logits).unsqueeze(1),
-                torch.zeros_like(neg_logits)
-            ], dim=1)
+            # Get logits directly from the model
+            logits = model(input_seq, transfer_src=transfer, candidate_items=candidates)
 
             # Compute loss
-            loss = loss_fn(all_logits.reshape(-1), all_labels.reshape(-1))
-            batch_elems = all_logits.numel()
+            loss = loss_fn(logits.reshape(-1), labels.reshape(-1))
+            batch_elems = logits.numel()
             loss_num += loss.item() * batch_elems
             loss_den += batch_elems
 
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
 
         return loss_num / max(1, loss_den)
@@ -185,7 +179,7 @@ class TrainerTransfer:
                     model.state_dict(),
                     os.path.join(self.config.model_dir, "transfer_domain", f"{save_name}.pth")
                 )
-                print(f"   -> New best transfer model saved")
+                print(f"   -> New best transfer model saved in {self.config.model_dir}/transfer_domain/{save_name}.pth")
 
         print(f"\n   Training complete. Best epoch: {best_epoch} with NDCG@{self.config.top_k}: {best_ndcg:.4f}")
 

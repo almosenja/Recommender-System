@@ -85,24 +85,22 @@ class Evaluator:
             transfer = batch["transfer_src"].to(device)
             batch_size = input_seq.size(0)
 
-            fused = model(input_seq, transfer_source=transfer)
-            cand = torch.cat([pos_items.unsqueeze(1), neg_items], dim=1)
-            cand_emb = model.base_model.item_embed(cand)
-            logits = torch.bmm(cand_emb, fused.unsqueeze(-1)).squeeze(-1)
+            # Build candidate items
+            candidates = torch.cat([pos_items.unsqueeze(1), neg_items], dim=1)
+            logits = model(input_seq, transfer_src=transfer, candidate_items=candidates)
+            k = min(self.k, logits.size(1))
 
             # Calculate metrics
             full_idx = torch.argsort(logits, dim=1, descending=True)
             rank = (full_idx == 0).nonzero(as_tuple=True)[1] + 1  # 1-based
-            hit = (rank <= self.k).float()
-            ndcg = torch.where(rank <= self.k, 1.0 / torch.log2(rank.float() + 1), torch.zeros_like(hit))
-            precision = hit / float(self.k)
+            hit = (rank <= k).float()
+            ndcg = torch.where(rank <= k, 1.0 / torch.log2(rank.float() + 1), torch.zeros_like(hit))
+            precision = hit / float(k)
             mrr = 1.0 / rank.float()
 
             # Loss
-            labels = torch.cat([
-                torch.ones_like(logits[:, :1]),
-                torch.zeros_like(logits[:, 1:])
-            ], dim=1)
+            labels = torch.cat([torch.ones_like(logits[:, :1]),
+                                torch.zeros_like(logits[:, 1:])], dim=1)
 
             batch_elems = logits.numel()
             loss = loss_fn(logits.reshape(-1), labels.reshape(-1))

@@ -44,35 +44,28 @@ python main.py train \
 ### 2. Transfer Mode
 Train with transfer learning from source domain.
 ```commandline
-python main.py transfer \
-    --source-data-path data/amazon_reviews_Electronics.csv \
-    --target-data-path data/amazon_reviews_Video_Games.csv \
-    --epochs 10 \
-    --target-max-items 3000000 \
-    --source-model-name electronics_model \
-    --model-name transfer_model
+python main.py transfer --source-data-path data/amazon_reviews_Books.csv --target-data-path data/amazon_reviews_Movies_and_Tv.csv --epochs 5 --target-max-items 8000000 --source-model-name books_model --model-name transfer_model
   ```
 
 ### 3. Evaluation Mode
 Evaluate transfer model on all, cold-start, and warm-start users.
 ```commandline
+
 python main.py eval \
-    --data-path data/amazon_reviews_Video_Games.csv 
+    --data-path data/amazon_reviews_Movies_and_TV.csv 
 ```
 
 ### 4. Reinforcement Learning Fine-Tuning
 Add RL fine-tuning after cross-domain training:
 ```commandline
-python main.py \
-    --source-data data/books.csv \
-    --target-data data/movies.csv \
-    --epochs 10 \
-    --use-rl \
-    --rl-epochs 50 \
-    --rl-lr 3e-5
+python main.py rl_finetune --data-path data/amazon_reviews_Movies_and_TV.csv --epochs 5 --model-name transfer_model
 ````
 
-
+### 5. Inference Mode
+Generate top-K recommendations for a user.
+```commandline
+python main.py inference --data-path data/amazon_reviews_Movies_and_TV.csv --model-name transfer_model --num-samples 5 --top-k 10 --metadata-path data/amazon_meta_Movies_and_TV.csv
+```
 
 
 ## Data Preparation

@@ -50,7 +50,7 @@ class Config:
     device: str = "cuda"
 
     def __post_init__(self):
-        domains_dir = ["source_domain", "transfer_domain"]
+        domains_dir = ["source_domain", "transfer_domain", "transfer_domain_rl"]
         for domain in domains_dir:
             save_path = os.path.join(self.save_dir, domain)
             model_path = os.path.join(self.model_dir, domain)

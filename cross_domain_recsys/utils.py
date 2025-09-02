@@ -4,7 +4,7 @@ import random
 import os
 import json
 import pickle
-import tqdm
+from tqdm import tqdm
 from typing import Dict
 from config import Config
 
@@ -44,6 +44,7 @@ def compute_user_representations(model,
                                  user_encoder_source,
                                  max_seq_len: int = 50,
                                  batch_size: int = 512,
+                                 save_path: str = "user_representations.pkl",
                                  device: str = "cuda") -> Dict:
     """Compute user representations from their sequences."""
     model.eval().to(device)

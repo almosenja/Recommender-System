@@ -22,8 +22,7 @@ class RLTrainer:
 
         # Feedback to reward mapping
         self.feedback_reward = {
-            "like": 1.0, "purchase": 1.0, "click": 0.3,
-            "add_to_cart": 0.7, "dislike": -0.5, "skip": 0.0
+            "click": 0.3, "skip": 0.0
         }
 
     def events_to_rewards(self, events):

@@ -1,7 +1,5 @@
 import torch
-import numpy as np
 from typing import List, Dict, Optional
-
 
 class RecommendationInference:
     def __init__(self, model, data_processor, config, transfer_matrix):
@@ -23,23 +21,24 @@ class RecommendationInference:
         padded_seq = [0] * pad_len + seq
         input_seq = torch.tensor([padded_seq], dtype=torch.long, device=self.device)
 
-        # # Get transfer vector for this user
+        # Get transfer vector for this user
         transfer_vec = None
         if user_id is not None and user_id < len(self.transfer_matrix):
-            transfer_vec = self.transfer_matrix[user_id].unsqueeze(0).to(self.device)
-            if transfer_vec.norm() == 0:
-                transfer_vec = None # No valid transfer vector
+            user_transfer_vec = self.transfer_matrix[user_id].unsqueeze(0).to(self.device)
+            if user_transfer_vec.norm() > 0:
+                transfer_vec = user_transfer_vec
 
-        logits = self.model.predict_next(input_seq, transfer_src=transfer_vec)
+        # Get model predictions and squeeze the batch dimension
+        logits = self.model.predict_next(input_seq, transfer_src=transfer_vec).squeeze(0) # <-- FIX 1: SQUEEZE HERE
 
-        # Exclude items in the user's history
+        # Exclude padding item (ID 0) and items in the user's history
         logits[0] = -float("inf")
-        for item in user_sequence:
-            if item < len(logits):
-                logits[item] = -float("inf")
+        if user_sequence:
+            history_items = torch.tensor(user_sequence, dtype=torch.long, device=self.device)
+            logits.index_fill_(0, history_items, -float("inf"))
 
         # Get top-k items
-        top_scores, top_items = torch.topk(logits, min(k, len(logits)))
+        top_scores, top_items = torch.topk(logits, k)
         return {
             "items": top_items.cpu().numpy(),
             "scores": top_scores.cpu().numpy(),
@@ -49,11 +48,10 @@ class RecommendationInference:
     def display_recommendations(self, user_raw: str, user_sequences: Dict,
                                 k: int = 10, metadata: Optional[Dict] = None):
         """Display recommendations for a user in a formatted way."""
-        # Get user ID
         if self.data_processor.user_encoder:
             try:
                 user_id = self.data_processor.user_encoder.transform([user_raw])[0]
-            except:
+            except ValueError:
                 print(f"User {user_raw} not found in encoder")
                 return
         else:
@@ -63,52 +61,33 @@ class RecommendationInference:
             print(f"User {user_raw} (ID: {user_id}) has no interaction history")
             return
 
-        # Get user sequence
         user_seq = user_sequences[user_id]
-
-        # Get recommendations
         recs = self.get_recommendations(user_seq, k=k, user_id=user_id)
 
-        # Display results
         print(f"\nUser: {user_raw} (ID: {user_id})")
-
-        # Show transfer status
-        if recs.get("has_transfer", False):
-            print("Transfer status: ✓ Has source domain information")
-        else:
-            print("Transfer status: ✗ No source domain information (using target only)")
-
+        print(f"Transfer status: {'Has source domain information' if recs.get('has_transfer') else 'No source domain information'}")
         print("-" * 80)
 
-        # Show recent interactions
         print("Recent interactions (most recent first):")
-        recent_items = user_seq[-5:][::-1]  # Last 5 items, reversed
+        recent_items = user_seq[-5:][::-1]
         for item_id in recent_items:
-            if self.data_processor.item_encoder:
-                try:
-                    item_raw = self.data_processor.item_encoder.inverse_transform([item_id - 1])[0]
-                except:
-                    item_raw = f"item_{item_id}"
-            else:
-                item_raw = str(item_id)
+            try:
+                item_raw = self.data_processor.item_encoder.inverse_transform([item_id - 1])[0]
+                item_info = f"  - {item_raw} (ID: {item_id})"
+                if metadata and item_raw in metadata:
+                    item_info += f" - {metadata[item_raw][:50]}"
+                print(item_info)
+            except IndexError:
+                print(f"  - Unknown Item (ID: {item_id})")
 
-            item_info = f"  - {item_raw} (ID: {item_id})"
-            if metadata and item_raw in metadata:
-                item_info += f" - {metadata[item_raw][:50]}"
-            print(item_info)
 
-        # Show recommendations
         print(f"\nTop {k} Recommendations:")
         for i, (item_id, score) in enumerate(zip(recs['items'], recs['scores']), 1):
-            if self.data_processor.item_encoder:
-                try:
-                    item_raw = self.data_processor.item_encoder.inverse_transform([item_id - 1])[0]
-                except:
-                    item_raw = f"item_{item_id}"
-            else:
-                item_raw = str(item_id)
-
-            rec_info = f"  {i}. {item_raw} (ID: {item_id}, Score: {score:.4f})"
-            if metadata and item_raw in metadata:
-                rec_info += f" - {metadata[item_raw][:50]}"
-            print(rec_info)
+            try:
+                item_raw = self.data_processor.item_encoder.inverse_transform([item_id - 1])[0]
+                rec_info = f"  {i}. {item_raw} (ID: {item_id}, Score: {score:.4f})"
+                if metadata and item_raw in metadata:
+                    rec_info += f" - {metadata[item_raw][:50]}"
+                print(rec_info)
+            except IndexError:
+                 print(f"  {i}. Unknown Item (ID: {item_id}, Score: {score:.4f})")

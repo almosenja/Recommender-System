@@ -9,7 +9,7 @@ class DataProcessor:
     def __init__(self, config):
         self.config = config
 
-    def load_csv(self, filepath: str, max_items: Optional[int] = None) -> pd.DataFrame:
+    def load_csv(self, filepath: str, max_items: Optional[int] = None, seed: int = 42) -> pd.DataFrame:
         """Load data from CSV file with column mapping."""
         print(f"   Loading data from {filepath}...")
         df = pd.read_csv(filepath)
@@ -27,8 +27,8 @@ class DataProcessor:
 
         # Random sampling if max_items specified
         if max_items and len(df) > max_items:
-            df = df.head(n=max_items).reset_index(drop=True)
-            print(f"   Sampled {max_items} rows from dataset")
+            frac = max_items / len(df)
+            df = df.sample(frac=frac, random_state=seed).reset_index(drop=True)
 
         print(f"   Loaded {len(df)} rows with {df['user'].nunique()} users and {df['item'].nunique()} items")
         return df
@@ -37,19 +37,24 @@ class DataProcessor:
         """Filter users and items based on minimum interaction thresholds"""
         df["label"] = 1.0
 
-        # Filter by minimum interactions
-        user_counts = df.groupby("user").size()
-        valid_users = user_counts[user_counts >= self.config.min_user_interactions].index
+        while True:
+            initial_rows = df.shape[0]
 
-        item_counts = df.groupby("item").size()
-        valid_items = item_counts[item_counts >= self.config.min_item_interactions].index
+            user_counts = df.groupby("user").size()
+            valid_users = user_counts[user_counts >= self.config.min_user_interactions].index
+            df = df[df["user"].isin(valid_users)]
 
-        df_filtered = df[df["user"].isin(valid_users) & df["item"].isin(valid_items)]
+            item_counts = df.groupby("item").size()
+            valid_items = item_counts[item_counts >= self.config.min_item_interactions].index
+            df = df[df["item"].isin(valid_items)]
 
-        print(f"   After filtering: {len(df_filtered)} rows, {df_filtered['user'].nunique()} users, "
-              f"{df_filtered['item'].nunique()} items")
+            if df.shape[0] == initial_rows:
+                break
 
-        return df_filtered
+        print(f"   After filtering: {len(df)} rows, {df['user'].nunique()} users, "
+              f"{df['item'].nunique()} items")
+
+        return df
 
     def encode_ids(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, LabelEncoder, LabelEncoder]:
         """Encode user and item IDs to sequential integers"""

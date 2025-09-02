@@ -29,12 +29,11 @@ class TransformerBlock(nn.Module):
         self.ffn = PointWiseFeedForward(hidden_dim, dropout)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, attn_mask=None):
-        # Self-attention with residual connection
+    def forward(self, x, attn_mask=None, key_padding_mask=None):
         attn_out, _ = self.attn(x, x, x, attn_mask=attn_mask)
+        if key_padding_mask is not None:
+            attn_out = attn_out.masked_fill(key_padding_mask.unsqueeze(-1), 0.0)
         x = self.ln1(x + self.dropout(attn_out))
-
-        # Feed-forward network with residual connection
         ffn_out = self.ffn(x)
         x = self.ln2(x + self.dropout(ffn_out))
 
@@ -55,20 +54,14 @@ class SASRec(nn.Module):
         self.hidden_dim = hidden_dim
         self.max_seq_len = max_seq_len
 
-        # Embedding layers
         self.item_embed = nn.Embedding(num_items, hidden_dim, padding_idx=0)
         self.positional_embed = nn.Embedding(max_seq_len, hidden_dim)
         self.dropout = nn.Dropout(dropout)
-
-        # Stack of SASRec blocks
         self.blocks = nn.ModuleList([
             TransformerBlock(hidden_dim, num_heads, dropout) for _ in range(num_blocks)
         ])
 
-        # Final layer norm
         self.ln = nn.LayerNorm(hidden_dim)
-
-        # Initialize weights
         self._reset_parameters()
 
     def _reset_parameters(self):
@@ -77,36 +70,24 @@ class SASRec(nn.Module):
 
     def forward(self, input_seq, candidate_items=None):
         batch_size, seq_len = input_seq.shape
-
-        # Get item embeddings
         item_embeds = self.item_embed(input_seq)  # [B, L, D]
-
-        # Add positional embeddings
         positions = torch.arange(seq_len, device=input_seq.device).unsqueeze(0)
         pos_embeds = self.positional_embed(positions)  # [1, L, D]
         x = self.dropout(item_embeds + pos_embeds)
 
-        # Create causal attention mask
         attn_mask = self._create_causal_mask(seq_len, input_seq.device)
         pad_mask = input_seq.eq(0)
 
-        # Pass through transformer blocks
         for block in self.blocks:
-            x = block(x, attn_mask=attn_mask)
+            x = block(x, attn_mask=attn_mask, key_padding_mask=pad_mask)
 
-        # Final layer norm
         x = self.ln(x)  # [B, L, D]
         x = x.masked_fill(pad_mask.unsqueeze(-1), 0.0)
 
         # If candidate_items provided, score them
         if candidate_items is not None:
-            # Get embeddings for candidate items
             cand_emb = self.item_embed(candidate_items) # [B, N, D]
-
-            # Use last position's representation for scoring
             last_hidden = x[:, -1, :].unsqueeze(1)  # [B, 1, D]
-
-            # Compute scores via dot product
             scores = torch.matmul(last_hidden, cand_emb.transpose(1, 2)).squeeze(1) # [B, N]
             return scores
 
@@ -118,13 +99,8 @@ class SASRec(nn.Module):
         return mask
 
     def predict_next(self, input_seq):
-        # Get sequence representations
         seq_repr = self.forward(input_seq)  # [B, L, D]
-
-        # Use last position for prediction
         last_hidden = seq_repr[:, -1, :]  # [B, D]
-
-        # Score against all item embeddings
         all_item_embeds = self.item_embed.weight  # [num_items, D]
         scores = torch.matmul(last_hidden, all_item_embeds.T)  # [B, num_items]
         return scores
@@ -139,31 +115,44 @@ class SASRecTransfer(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(bridge_hidden, hidden_dim)
         )
-        self.linear = nn.Linear(2 * hidden_dim, hidden_dim)
+        # Gating network
+        self.gate_network = nn.Sequential(
+            nn.Linear(2 * hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid()
+        )
 
-    def forward(self, input_seq, transfer_source=None):
+    def forward(self, input_seq, transfer_src=None, candidate_items=None):
         seq_output = self.base_model(input_seq)
         last_hidden = seq_output[:, -1, :]
+        fused_repr = last_hidden
 
-        if transfer_source is not None:
-            bridge_out = self.bridge(transfer_source)
-
+        if transfer_src is not None:
             # A mask to identify which users in the batch have a source vector
-            has_transfer = (transfer_source.abs().sum(dim=-1, keepdim=True) > 0).float()
-            last_hidden_n = nn.functional.layer_norm(last_hidden, last_hidden.shape[-1:])
-            bridge_out_n = nn.functional.layer_norm(bridge_out, bridge_out.shape[-1:])
+            has_transfer = (transfer_src.abs().sum(dim=-1, keepdim=True) > 1e-8).float()
 
-            combined = torch.cat([last_hidden_n, bridge_out_n], dim=-1)
-            gate = torch.sigmoid(self.linear(combined))
-            fused_logic = gate * last_hidden + (1.0 - gate) * bridge_out
-            fused = has_transfer * fused_logic + (1.0 - has_transfer) * last_hidden
-        else:
-            fused = last_hidden
+            if has_transfer.sum() > 0:
+                # Project source representation with a residual connection
+                bridge_out = self.bridge(transfer_src) + transfer_src
 
-        return fused
+                combined = torch.cat([last_hidden, bridge_out], dim=-1)
+                gate = self.gate_network(combined)
+                fused_logic = gate * bridge_out + (1.0 - gate) * last_hidden
 
-    def predict_next(self, input_seq, transfer_source=None):
-        fused_repr = self.forward(input_seq, transfer_source)
+                # Adaptive cold and warm start fusion
+                fused_repr = has_transfer * fused_logic + (1.0 - has_transfer) * last_hidden
+
+            # Score candidates
+        if candidate_items is not None:
+            cand_emb = self.base_model.item_embed(candidate_items)  # [B, N, D]
+            scores = torch.matmul(fused_repr.unsqueeze(1), cand_emb.transpose(1, 2)).squeeze(1)
+            return scores
+
+        return fused_repr
+
+    def predict_next(self, input_seq, transfer_src=None):
+        fused_repr = self.forward(input_seq, transfer_src)
         all_item_embeds = self.base_model.item_embed.weight
         scores = torch.matmul(fused_repr, all_item_embeds.T)
         return scores
@@ -171,26 +160,27 @@ class SASRecTransfer(nn.Module):
 
 def init_target_from_source(source: SASRec, target: SASRec):
     with torch.no_grad():
-        # positional + final LN
+        # Positional + final LN
         target.positional_embed.weight.copy_(source.positional_embed.weight)
         target.ln.weight.copy_(source.ln.weight)
         target.ln.bias.copy_(source.ln.bias)
-        # blocks
+
+        # Blocks
         for b_src, b_tgt in zip(source.blocks, target.blocks):
             # MHAttn
             b_tgt.attn.in_proj_weight.copy_(b_src.attn.in_proj_weight)
             b_tgt.attn.in_proj_bias.copy_(b_src.attn.in_proj_bias)
             b_tgt.attn.out_proj.weight.copy_(b_src.attn.out_proj.weight)
             b_tgt.attn.out_proj.bias.copy_(b_src.attn.out_proj.bias)
+
             # LayerNorms
             b_tgt.ln1.weight.copy_(b_src.ln1.weight)
             b_tgt.ln1.bias.copy_(b_src.ln1.bias)
             b_tgt.ln2.weight.copy_(b_src.ln2.weight)
             b_tgt.ln2.bias.copy_(b_src.ln2.bias)
+
             # FFN
             b_tgt.ffn.w1.weight.copy_(b_src.ffn.w1.weight)
             b_tgt.ffn.w1.bias.copy_(b_src.ffn.w1.bias)
             b_tgt.ffn.w2.weight.copy_(b_src.ffn.w2.weight)
             b_tgt.ffn.w2.bias.copy_(b_src.ffn.w2.bias)
-
-# Initialize target model from source model
